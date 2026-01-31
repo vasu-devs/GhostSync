@@ -304,15 +304,8 @@ class AntigravityController:
         user_id = update.effective_user.id
         set_user_state(user_id, UserState.WAITING_FOR_PATH)
         
-        # 1. Immediately open Antigravity (blank instance)
-        log.info("Opening Antigravity instance at /start...")
-        try:
-            subprocess.Popen([self.ANTIGRAVITY_EXE])
-            time.sleep(3) # Wait for it to launch
-        except Exception as e:
-            log.error(f"Failed to launch Antigravity: {e}")
-            
-        await update.message.reply_text("👻 **GhostSync Active**\nAntigravity has been launched.\nSend the **project path** to begin.")
+        # Don't open Antigravity yet - wait for folder path
+        await update.message.reply_text("👻 **GhostSync Active**\nSend the **project folder path** to open Antigravity.")
 
     def open_folder(self, path: str):
         try:
@@ -350,42 +343,70 @@ class AntigravityController:
                 return {"ai_reply": "❌ Error: Antigravity window not found.", "local_url": None, "tunnel_url": None, "screenshot": None}
 
         try:
+            # Get window rectangle for coordinate calculations
+            rect = RECT()
+            user32.GetWindowRect(self.hwnd, ctypes.byref(rect))
+            win_left, win_top = rect.left, rect.top
+            win_width = rect.right - rect.left
+            win_height = rect.bottom - rect.top
+            log.info(f"Window rect: {win_left},{win_top} size {win_width}x{win_height}")
+            
             # 1. Force Awake & Foreground
-            log.info("Sequence 1: Force Restore & Foreground")
+            log.info("Step 1: Force window to foreground")
             if user32.IsIconic(self.hwnd):
-                user32.ShowWindow(self.hwnd, 9) # SW_RESTORE
+                user32.ShowWindow(self.hwnd, 9)  # SW_RESTORE
             user32.SetForegroundWindow(self.hwnd)
             time.sleep(0.5)
-
-            # 2. Safety Reset
-            log.info("Sequence 2: Safety Reset (Esc x2)")
-            pyautogui.press('esc', presses=2, interval=0.1)
+            
+            # 2. Click on the window center first to ensure it's focused
+            center_x = win_left + win_width // 2
+            center_y = win_top + win_height // 2
+            log.info(f"Step 2: Click center to focus window ({center_x}, {center_y})")
+            pyautogui.click(center_x, center_y)
             time.sleep(0.3)
             
-            # 3. Command Palette: Focus Chat
-            log.info("Sequence 3: Command Palette -> Focus Chat")
-            pyautogui.hotkey('ctrl', 'shift', 'p')
-            time.sleep(0.4)
-            pyperclip.copy("Antigravity: Focus Chat")
-            pyautogui.hotkey('ctrl', 'v')
+            # 3. Use keyboard shortcut Ctrl+Shift+I to open Antigravity chat
+            # (This is the inline chat shortcut in VS Code based editors)
+            log.info("Step 3: Open inline chat with Ctrl+I")
+            pyautogui.hotkey('ctrl', 'i')
+            time.sleep(1.0)
+            
+            # 4. If that didn't work, try clicking on the chat panel area
+            # Antigravity chat is typically on the right side, bottom portion
+            # Chat input is at the bottom of the right panel
+            chat_input_x = win_left + int(win_width * 0.75)  # 75% from left (right panel)
+            chat_input_y = win_top + int(win_height * 0.85)   # 85% from top (bottom of panel)
+            log.info(f"Step 4: Click chat input area ({chat_input_x}, {chat_input_y})")
+            pyautogui.click(chat_input_x, chat_input_y)
             time.sleep(0.3)
-            pyautogui.press('enter')
-            time.sleep(0.6) # Wait for UI shift
-
-            # 4. Input Cleanup
-            log.info("Sequence 4: Input Cleanup (Ctrl+A + Backspace)")
-            pyautogui.hotkey('ctrl', 'a')
-            time.sleep(0.1)
-            pyautogui.press('backspace')
+            
+            # 5. Triple-click to select all in current input, then delete
+            log.info("Step 5: Clear any existing text (triple-click + delete)")
+            pyautogui.click(chat_input_x, chat_input_y, clicks=3)
+            time.sleep(0.2)
+            pyautogui.press('delete')
             time.sleep(0.2)
             
-            # 5. Type Prompt (via Clipboard for reliability)
-            log.info("Sequence 5: Final Prompt Entry via Clipboard")
+            # 6. Type the prompt using pyautogui.write() for reliability
+            # First copy to clipboard as backup
+            log.info(f"Step 6: Type prompt ({len(text)} chars)")
             pyperclip.copy(text)
+            
+            # Use Ctrl+V to paste (more reliable than typing for special characters)
             pyautogui.hotkey('ctrl', 'v')
-            time.sleep(0.1)
+            time.sleep(0.5)
+            
+            # 7. Take a screenshot to verify text was entered
+            log.info("Step 7: Verifying text entry...")
+            verify_ss = pyautogui.screenshot()
+            verify_ss.save(str(Path(__file__).parent / "verify_prompt.png"))
+            
+            # 8. Submit with Enter
+            log.info("Step 8: Submit prompt (Enter)")
             pyautogui.press('enter')
-            log.info("--- SEQUENCE COMPLETE ---")
+            time.sleep(0.5)
+            
+            log.info("=== PROMPT SEQUENCE COMPLETE ===")
 
         except Exception as e:
             log.error(f"CRITICAL: Focus sequence failed: {e}")
@@ -522,19 +543,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         def run_task():
             return controller.send_prompt(text, lambda s, b: "accept")
 
-        task = asyncio.to_thread(run_task)
+        # Run the blocking task in a thread and await it
+        log.info(f"Executing prompt task for: {text[:30]}...")
+        result = await asyncio.to_thread(run_task)
+        log.info("Prompt task completed!")
         
-        # Fake streaming loop for now
-        while not task.done():
-            await asyncio.sleep(2)
-            if controller.latest_stream_ss:
-                try:
-                    with open(controller.latest_stream_ss, 'rb') as f:
-                        # Update status (re-send or edit if photo)
-                        pass 
-                except: pass
-
-        result = await task
         await context.bot.delete_message(update.effective_chat.id, status_msg.message_id)
 
         reply = result["ai_reply"][:1000]
