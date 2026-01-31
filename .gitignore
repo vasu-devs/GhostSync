@@ -23,19 +23,20 @@ MANIFEST
 
 # Virtual Environments
 venv/
+venv_*/
 .venv/
 env/
 ENV/
-bin/
-include/
-lib/
-share/
 
-# Environment Variables
+# Environment Variables - NEVER COMMIT THESE
 .env
+*.env
+!.env.example
 
 # Secret files
 secrets.json
+*.pem
+*.key
 
 # IDEs
 .vscode/
@@ -45,9 +46,23 @@ secrets.json
 
 # Project specific
 backend/venv/
+backend/venv_*/
 backend/.env
 verify_*.png
+ss_*.png
+stream_temp.png
 *.log
+ghostsync.log
+
+# Build artifacts
+backend/build/
+backend/dist/
+backend/build_*/
+backend/dist_*/
+*.spec.bak
+
+# Large binaries (users download separately)
+cloudflared.exe
 
 # OS
 .DS_Store
